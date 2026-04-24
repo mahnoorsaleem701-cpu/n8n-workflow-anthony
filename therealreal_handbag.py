@@ -3,59 +3,51 @@ import json
 import re
 from datetime import datetime, timezone
 
+# ── ScraperAPI configuration ────────────────────────────────────────────
+# Replace with your real ScraperAPI key, or set SCRAPERAPI_KEY in the env
+# and read it via os.environ.
+SCRAPERAPI_KEY = 'YOUR_SCRAPERAPI_KEY'
+
+# ScraperAPI feature flags are embedded in the proxy username:
+#   scraperapi.<flag>=<value>.<flag>=<value>...
+# Docs: https://docs.scraperapi.com/python/making-requests/proxy-mode
+SCRAPERAPI_PROXY = (
+    f'http://scraperapi.render=true.country_code=us'
+    f':{SCRAPERAPI_KEY}@proxy-server.scraperapi.com:8001'
+)
+
+
 class TheRealRealSpider(scrapy.Spider):
     name = "therealreal_handbag"
 
     custom_settings = {
         'ROBOTSTXT_OBEY': False,
 
-        # ── ScrapeOps proxy ─────────────────────────────────────────────
-        # Keep proxy-side settings in ONE place. Either use
-        # SCRAPEOPS_PROXY_SETTINGS globally, OR per-request `sops_*` meta
-        # keys — mixing both duplicates query params and triggers 500s.
-        'SCRAPEOPS_API_KEY': '55ec0ebf-c5a2-4e71-8275-5eb5225eb6ff',
-        'SCRAPEOPS_PROXY_ENABLED': True,
-        'SCRAPEOPS_PROXY_SETTINGS': {
-            'country': 'us',
-            'render_js': True,
-        },
-
         # ── Concurrency / throttling ────────────────────────────────────
-        # ScrapeOps free / starter plans cap concurrency at 1. Going higher
-        # returns 500/429 from the proxy endpoint. Raise this only if your
-        # plan allows it.
-        'CONCURRENT_REQUESTS': 1,
+        # ScraperAPI free tier allows 5 concurrent requests; starter 10.
+        # Bump this up to match your plan.
+        'CONCURRENT_REQUESTS': 5,
         'DOWNLOAD_DELAY': 1,
         'AUTOTHROTTLE_ENABLED': True,
         'AUTOTHROTTLE_START_DELAY': 1,
         'AUTOTHROTTLE_MAX_DELAY': 30,
-        'AUTOTHROTTLE_TARGET_CONCURRENCY': 1.0,
+        'AUTOTHROTTLE_TARGET_CONCURRENCY': 2.0,
 
         # ── Retries ─────────────────────────────────────────────────────
-        # Default RETRY_HTTP_CODES does NOT include 500, so transient
-        # ScrapeOps 5xx responses fail immediately. Add them here.
+        # ScraperAPI returns 500 when the target site fails, and 429 when
+        # you hit your concurrency limit. Both need to be retried.
         'RETRY_ENABLED': True,
         'RETRY_TIMES': 5,
         'RETRY_HTTP_CODES': [408, 429, 500, 502, 503, 504, 522, 524],
+
+        # render=true can take 30-60s. Default 180 is enough, keep it.
         'DOWNLOAD_TIMEOUT': 180,
 
         'FEED_EXPORT_ENCODING': 'utf-8-sig',
 
-        # ── Middlewares ─────────────────────────────────────────────────
-        # The ScrapeOps proxy SDK rewrites requests to proxy.scrapeops.io,
-        # so HttpProxyMiddleware must stay disabled. The ScrapeOps retry
-        # middleware replaces Scrapy's default so it can classify proxy
-        # errors correctly — do not enable both.
-        'DOWNLOADER_MIDDLEWARES': {
-            'scrapeops_scrapy_proxy_sdk.scrapeops_scrapy_proxy_sdk.ScrapeOpsScrapyProxySdk': 725,
-            'scrapy.downloadermiddlewares.httpproxy.HttpProxyMiddleware': None,
-            'scrapy.downloadermiddlewares.retry.RetryMiddleware': None,
-            'scrapeops_scrapy.middleware.retry.RetryMiddleware': 550,
-        },
-
-        'EXTENSIONS': {
-            'scrapeops_scrapy.extension.ScrapeOpsMonitor': 500,
-        },
+        # HttpProxyMiddleware is enabled by default — leave it ON so the
+        # per-request `proxy` meta is honoured. No custom middlewares
+        # needed for ScraperAPI in proxy mode.
     }
 
     headers = {
@@ -104,9 +96,6 @@ class TheRealRealSpider(scrapy.Spider):
         '1601': 'Waist Bags',
     }
 
-    # NOTE: The IDs 30560 / 655545 / 2988045 in the previous version were
-    # invalid on TheRealReal and caused the backend to 500 (relayed as a
-    # ScrapeOps 500). Condition IDs on TRR are a contiguous sequence.
     CONDITIONS = {
         '18': 'Pristine',
         '19': 'Excellent',
@@ -138,6 +127,7 @@ class TheRealRealSpider(scrapy.Spider):
                         headers=self.headers,
                         callback=self.parse,
                         meta={
+                            'proxy': SCRAPERAPI_PROXY,
                             'designer_id': designer_id,
                             'brand_name': brand_name,
                             'category_name': category_name,
@@ -166,6 +156,7 @@ class TheRealRealSpider(scrapy.Spider):
                 callback=self.parse_product_detail,
                 headers=self.headers,
                 meta={
+                    'proxy':          SCRAPERAPI_PROXY,
                     'designer_id':    designer_id,
                     'brand_name':     brand_name,
                     'category_name':  category_name,
@@ -185,6 +176,7 @@ class TheRealRealSpider(scrapy.Spider):
                 next_page,
                 callback=self.parse,
                 meta={
+                    'proxy':          SCRAPERAPI_PROXY,
                     'designer_id':    designer_id,
                     'brand_name':     brand_name,
                     'category_name':  category_name,
